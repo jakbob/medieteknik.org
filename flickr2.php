@@ -13,7 +13,8 @@ så jag antar att jag måste göra en såndär ful klass-inkapsling :(
 */
 
 //temp, gör så att den kan köras utan att vara aktiverad av wordpress
-//include_once('../../wp-blog-header.php');
+include_once('../../wp-blog-header.php');
+require_once(ABSPATH . 'wp-admin/includes/image.php'); //required for image metadata
 
 class Medieteknik_Flickr_Robot {
 
@@ -24,12 +25,13 @@ var $flickr_author = 4;
 var $flickr_category = 12;
 var $flickr_media_tag = 'flickr';
 var $photos_per_page = 10;
+var $galleries;
   
 function Medieteknik_Flickr_Robot () {
-  //I don't know the best approach here, copied this from tutorial
-  add_action('flickr_picture_update', array($this, 'testtest'));
-  $file = fopen(WP_CONTENT_DIR . '/bajs', 'a');
-  fwrite($file, date('ekiekieki D, j/n Y H:i:s') . "\n");
+  //setup the galleries variable with all info we need
+  $this->galleries = array(
+    array('groupid' => '1032326@N22', 'pageid' => 2953, 'mediatag' => 'fotoklubben'),
+  );
 }
 
 function testtest() {
@@ -53,12 +55,12 @@ static function deactivate() {
 	wp_clear_scheduled_hook('flickr_picture_update');
 }
   
-function get_photos($photo_number=1) {
+function get_photos($groupid, $photo_number=1) {
   //parameters to use
   $params = array(
   'api_key' => $this->flickr_api_key,
   'method' => 'flickr.groups.pools.getPhotos',
-  'group_id' => $this->flickr_group_id,
+  'group_id' => $groupid,
   'per_page' => $this->photos_per_page,
   'page' => (string) $photo_number,
   'extras' => 'url_m,path_alias',
@@ -106,7 +108,7 @@ function check_if_new($new_photo, $old_photos) {
   return True;
 }
 
-function add_photo($photo) {
+function add_photo($photo, $gallery) {
   /*
   Add a flickr photo to wordpress in form of a attachment
   */
@@ -119,22 +121,39 @@ function add_photo($photo) {
   $photo_post['post_author'] = $this->flickr_author;
   $photo_post['post_category'] = array($this->flickr_category, );
   $photo_post['post_mime_type'] = 'image/jpeg'; //assuming jpeg, is this ok?
+  $photo_post['post_parent'] = $gallery['pageid']; 
   $photo_post['guid'] = $photo['url_m']; //magically linking the photo
   
   //$postid = wp_insert_post($photo_post);
   $postid = wp_insert_attachment($photo_post);
-  /* wordpress now recomends me to update metadata for the image. 
-  But I can't do that the usual way. */
+  /* Update metadata now */
+  $this->set_metadata($postid, $photo_post['guid']);
   
   //now tag with mediatags
-  wp_set_object_terms($postid, array($this->flickr_media_tag), MEDIA_TAGS_TAXONOMY);
+  wp_set_object_terms($postid, array($gallery['mediatag']), MEDIA_TAGS_TAXONOMY);
 
   //and we should be done. Horay!
 }
 
-function add_new_recursive($startnum, $old_photos) {
+function set_metadata($post_id, $photo_url) {
+  
+  //spara bilden på servern temporärt
+  $contents = file_get_contents($photo_url);
+  $upload_dir = wp_upload_dir();
+  $upload_dir = $upload_dir['basedir'];
+  $temp_filename = $upload_dir . 'tempbild';
+  $fp = fopen($temp_filename, 'w');
+  fwrite($fp, $contents);
+  fclose($fp);
+  
+  //now generate the metadata and save
+  $attach_data = wp_generate_attachment_metadata($post_id, $temp_filename);
+  wp_update_attachment_metadata($post_id, $attach_data);
+}
+
+function add_new_recursive($startnum, $old_photos, $gallery) {
   //now search for new photos
-  $new_photos = $this->get_photos($startnum);
+  $new_photos = $this->get_photos($gallery['groupid'], $startnum);
   if (!$new_photos) {
     //something is wrong
     return;
@@ -146,14 +165,14 @@ function add_new_recursive($startnum, $old_photos) {
     {
       //if the photo is new, 
       //add it to the wordpress database
-      $this->add_photo($photo);
+      $this->add_photo($photo, $gallery);
     } else {
       $old = true;
     }
   }
   if (!$old) {
     //If no photos were old, there might be more to find
-    $this->add_new_recursive($startnum + 1, $old_photos);
+    $this->add_new_recursive($startnum + 1, $old_photos, $gallery);
   }
 }
 
@@ -170,12 +189,17 @@ function main() {
   $old_photos = get_posts($args);
   
   //Check and add new photos
-  $this->add_new_recursive(1, $old_photos);
+  foreach ($this->galleries as $gallery) {
+    $this->add_new_recursive(1, $old_photos, $gallery);
+  }
 }
   
 }
 
+$m = new Medieteknik_Flickr_Robot();
+$m->main();
+
 //$flickr = new Medieteknik_Flickr_Robot();
-register_activation_hook(__FILE__, array('Medieteknik_Flickr_Robot', 'activate'));
-register_deactivation_hook(__FILE__, array('Medieteknik_Flickr_Robot', 'deactivate'));
+//register_activation_hook(__FILE__, array('Medieteknik_Flickr_Robot', 'activate'));
+//register_deactivation_hook(__FILE__, array('Medieteknik_Flickr_Robot', 'deactivate'));
 ?>
